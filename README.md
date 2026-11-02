@@ -1,1 +1,0 @@
-# IoT-Based-Smart-Door-Lock-with-Fingerprint
