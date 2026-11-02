@@ -1,0 +1,99 @@
+const LINE_CHANNEL_ACCESS_TOKEN = "cKXxUigfEYpOOH92HcjT7GTKtFXTKJczkAs+rfMwgx3h20jZPhNziwMVvQ6CATUKVLzlvNf9DYG0/IFc2c/8DCDnOYro+iKfSuJVKw/S1P6M7Fv01Waqx/9YO1RX3esXkr3uYbnDj33JJWt0big70AdB04t89/1O/w1cDnyilFU=";
+const LINE_USER_ID = "Ud71a8f026090028cbe38a8c6172f4332"; 
+const DRIVE_FOLDER_ID = "17d9Ncvtc5ko4AM0rIZ26sYWLTEBd3zR6";
+const NTFY_TOPIC = "Warin_SmartLock_Alert_2026"; 
+
+function doPost(e) {
+  let fingerprintId = "N/A";
+  let name = "Unknown";
+  let status = "Access Granted";
+  let fileUrl = "No Image";
+  let fileId = "";
+  let imageBlob = null;
+
+  try {
+    const rawData = e.postData.contents;
+
+    const idMatch = rawData.match(/"id"\s*:\s*"([^"]+)"/);
+    const nameMatch = rawData.match(/"name"\s*:\s*"([^"]+)"/);
+    const statusMatch = rawData.match(/"status"\s*:\s*"([^"]+)"/);
+    const timeMatch = rawData.match(/"time"\s*:\s*"([^"]+)"/);
+    
+    if (idMatch) fingerprintId = idMatch[1];
+    if (nameMatch) name = nameMatch[1];
+    if (statusMatch) status = statusMatch[1];
+
+    try {
+      const data = JSON.parse(rawData);
+      const imageBase64 = data.image;
+
+      if (imageBase64 && imageBase64 !== "") {
+        const decodedBytes = Utilities.base64Decode(imageBase64);
+        const timestampStr = Utilities.formatDate(new Date(), "Asia/Bangkok", "yyyyMMdd_HHmmss");
+        const fileName = `Scan_${fingerprintId}_${timestampStr}.jpg`;
+        imageBlob = Utilities.newBlob(decodedBytes, "image/jpeg", fileName);
+        
+        const folder = DriveApp.getFolderById(DRIVE_FOLDER_ID);
+        const file = folder.createFile(imageBlob);
+        
+        file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+        fileUrl = file.getUrl();
+        fileId = file.getId();
+      }
+    } catch (jsonError) {
+      status = "Access (Image Error)";
+    }
+
+    const sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
+    let currentTime = Utilities.formatDate(new Date(), "Asia/Bangkok", "yyyy-MM-dd HH:mm:ss");
+    
+    if (timeMatch && timeMatch[1] !== "") {
+      currentTime = timeMatch[1]; 
+      fileUrl = "Synced from ESP32 Memory";
+    }
+    
+    sheet.appendRow([currentTime, fingerprintId, name, status, fileUrl]);
+
+    if (!(fingerprintId === "ALERT" && name === "INTRUDER")) {
+      sendLineMessage(currentTime, fingerprintId, name, status, fileId);
+    }
+
+    return ContentService.createTextOutput(JSON.stringify({ "result": "success" })).setMimeType(ContentService.MimeType.JSON);
+
+  } catch (mainError) {
+    return ContentService.createTextOutput(JSON.stringify({ "result": "error", "message": mainError.toString() })).setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+function sendLineMessage(time, id, name, status, fileId) {
+  const lineUrl = "https://api.line.me/v2/bot/message/push";
+  const textMessage = `🔔 มีการเข้าใช้งานประตู!\n🕒 เวลา: ${time}\n🆔 ID: ${id}\n👤 ชื่อ: ${name}\n📌 สถานะ: ${status}`;
+
+  let messages = [{"type": "text", "text": textMessage}];
+
+  if (fileId !== "") {
+    const directImageUrl = `https://drive.google.com/uc?export=download&id=${fileId}`;
+    messages.push({
+      "type": "image",
+      "originalContentUrl": directImageUrl,
+      "previewImageUrl": directImageUrl
+    });
+  }
+
+  const payload = {
+    "to": LINE_USER_ID,
+    "messages": messages
+  };
+
+  const options = {
+    "method": "post",
+    "headers": {
+      "Content-Type": "application/json",
+      "Authorization": "Bearer " + LINE_CHANNEL_ACCESS_TOKEN
+    },
+    "payload": JSON.stringify(payload),
+    "muteHttpExceptions": true
+  };
+
+  UrlFetchApp.fetch(lineUrl, options);
+}
